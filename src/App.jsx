@@ -58,6 +58,15 @@ function App() {
     setLogs([])
   }
 
+  const zebraCommand = (command) => {
+    const api = window.ZebraNative
+    if (!api || typeof api[command] !== 'function') {
+      setZebraStatus('Conexão indisponível: abra o APK Android com SDK Zebra')
+      return
+    }
+    api[command]()
+  }
+
   // Função para formatar número com zeros à esquerda
   const formatNumber = (num, length) => {
     return num.toString().padStart(length, '0')
@@ -290,6 +299,12 @@ function App() {
                 {collectionMode === 'zebra' ? (
                   <div className="space-y-2">
                     <p className="text-sm font-medium">Leitor: {zebraStatus}</p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button type="button" onClick={() => zebraCommand('connect')}>Conectar</Button>
+                      <Button type="button" variant="outline" onClick={() => zebraCommand('start')}>Iniciar leitura</Button>
+                      <Button type="button" variant="outline" onClick={() => zebraCommand('stop')}>Parar leitura</Button>
+                      <Button type="button" variant="outline" onClick={() => zebraCommand('disconnect')}>Desconectar</Button>
+                    </div>
                     <p className="text-sm text-gray-600">Registro: 850 + 16 dígitos do chip + HH:MM:SS.mmm. Leituras só entram quando recebidas do módulo nativo Zebra.</p>
                   </div>
                 ) : <>
