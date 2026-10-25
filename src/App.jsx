@@ -8,9 +8,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Download, Send, Settings, Play, Pause, MessageCircle, Mail, X } from 'lucide-react'
 import logo from './assets/logo.jpg'
 import './App.css'
+import { buildZebraRecord } from './lib/zebraRecord.js'
 
 function App() {
   const [sessionId, setSessionId] = useState('')
+  const [collectionMode, setCollectionMode] = useState('manual')
+  const [zebraStatus, setZebraStatus] = useState('Aguardando integração Android')
   const [isSessionActive, setIsSessionActive] = useState(false)
   const [userInput, setUserInput] = useState('')
   const [logs, setLogs] = useState([])
@@ -25,6 +28,35 @@ function App() {
     enabled: false
   })
   const inputRef = useRef(null)
+
+  // Eventos enviados pela camada nativa Android (SDK Zebra).
+  // Nenhuma conexão é simulada na versão web.
+  useEffect(() => {
+    const onTag = (event) => {
+      if (collectionMode !== 'zebra' || !isSessionActive) return
+      try {
+        const record = buildZebraRecord(event.detail?.chip, new Date())
+        setLogs(previous => [...previous, record])
+      } catch (error) {
+        setZebraStatus(`Leitura rejeitada: ${error.message}`)
+      }
+    }
+    const onStatus = (event) => {
+      setZebraStatus(String(event.detail?.status || 'Status indisponível'))
+    }
+    window.addEventListener('zebra-rfid-tag', onTag)
+    window.addEventListener('zebra-rfid-status', onStatus)
+    return () => {
+      window.removeEventListener('zebra-rfid-tag', onTag)
+      window.removeEventListener('zebra-rfid-status', onStatus)
+    }
+  }, [collectionMode, isSessionActive])
+
+  const beginZebraSession = () => {
+    setCollectionMode('zebra')
+    setIsSessionActive(true)
+    setLogs([])
+  }
 
   // Função para formatar número com zeros à esquerda
   const formatNumber = (num, length) => {
@@ -44,6 +76,7 @@ function App() {
   // Função para iniciar sessão
   const startSession = () => {
     if (sessionId.length === 5) {
+      setCollectionMode('manual')
       setIsSessionActive(true)
       setLogs([])
       // Focar no input de entrada de dados
@@ -115,7 +148,7 @@ function App() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `log_${sessionId}_${new Date().toISOString().split('T')[0]}.txt`
+    a.download = `log_${collectionMode === 'zebra' ? '850' : sessionId}_${new Date().toISOString().split('T')[0]}.txt`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -192,17 +225,27 @@ function App() {
           </CardHeader>
         </Card>
 
+        {/* Seleção de coletor: mantém a entrada manual independente do Zebra */}
+        {!isSessionActive && (
+          <Card className="bg-white/80 backdrop-blur-sm shadow-lg">
+            <CardContent className="pt-6 flex flex-wrap gap-2">
+              <Button type="button" variant={collectionMode === 'manual' ? 'default' : 'outline'} onClick={() => setCollectionMode('manual')}>Manual</Button>
+              <Button type="button" variant={collectionMode === 'zebra' ? 'default' : 'outline'} onClick={() => setCollectionMode('zebra')}>Zebra RFD8500</Button>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Configuração de Sessão */}
         {!isSessionActive ? (
           <Card className="bg-white/80 backdrop-blur-sm shadow-lg">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Settings className="h-5 w-5" />
-                Configurar Sessão
+                {collectionMode === 'manual' ? 'Configurar Sessão' : 'Leitor Zebra RFD8500'}
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div>
+              {collectionMode === 'manual' ? <div>
                 <label className="block text-sm font-medium mb-2">
                   ID da Sessão (5 dígitos)
                 </label>
@@ -214,10 +257,10 @@ function App() {
                   placeholder="Ex: 01234"
                   className="text-center text-lg font-mono"
                 />
-              </div>
-              <Button 
-                onClick={startSession}
-                disabled={sessionId.length !== 5}
+              </div> : <p className="text-sm text-gray-600">Os 16 dígitos da sessão e do atleta já estão gravados no chip. Não é necessário informar a sessão. A conexão física depende do módulo Android Zebra.</p>}
+              <Button
+                onClick={collectionMode === 'manual' ? startSession : beginZebraSession}
+                disabled={collectionMode === 'manual' && sessionId.length !== 5}
                 className="w-full"
                 size="lg"
               >
@@ -234,7 +277,7 @@ function App() {
                 <div className="flex justify-between items-center">
                   <CardTitle className="flex items-center gap-2">
                     <Badge variant="secondary" className="bg-green-100 text-green-800">
-                      Sessão Ativa: {sessionId}
+                      {collectionMode === 'manual' ? `Sessão Ativa: ${sessionId}` : 'Coleta Zebra RFD8500'}
                     </Badge>
                   </CardTitle>
                   <Button onClick={stopSession} variant="outline" size="sm">
@@ -244,6 +287,12 @@ function App() {
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
+                {collectionMode === 'zebra' ? (
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">Leitor: {zebraStatus}</p>
+                    <p className="text-sm text-gray-600">Registro: 850 + 16 dígitos do chip + HH:MM:SS.mmm. Leituras só entram quando recebidas do módulo nativo Zebra.</p>
+                  </div>
+                ) : <>
                 <div>
                   <label className="block text-sm font-medium mb-2">
                     Número do Participante
@@ -265,6 +314,7 @@ function App() {
                     Registrar Entrada
                   </Button>
                 </div>
+                </>}
               </CardContent>
             </Card>
 
