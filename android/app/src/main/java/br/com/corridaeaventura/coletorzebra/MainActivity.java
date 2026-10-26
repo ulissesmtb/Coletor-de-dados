@@ -7,6 +7,9 @@ import android.os.Bundle;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
+import androidx.webkit.WebViewAssetLoader;
 import android.webkit.WebSettings;
 import android.content.pm.PackageManager;
 import org.json.JSONObject;
@@ -21,7 +24,14 @@ public class MainActivity extends Activity {
         setContentView(web);
         web.getSettings().setJavaScriptEnabled(true);
         web.getSettings().setDomStorageEnabled(true);
-        web.setWebViewClient(new WebViewClient());
+        WebViewAssetLoader loader = new WebViewAssetLoader.Builder()
+            .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this))
+            .build();
+        web.setWebViewClient(new WebViewClient() {
+            @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                return loader.shouldInterceptRequest(request.getUrl());
+            }
+        });
         reader = new ZebraReaderController(this, this::sendStatus, this::sendTag);
         web.addJavascriptInterface(new Object() {
             @JavascriptInterface public void connect() { runOnUiThread(() -> reader.connect()); }
@@ -35,7 +45,7 @@ public class MainActivity extends Activity {
             requestPermissions(new String[]{Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN}, 850);
         }
         // The Vite build must be copied to app/src/main/assets/www/ before assembling.
-        web.loadUrl("file:///android_asset/www/index.html");
+        web.loadUrl("https://appassets.androidplatform.net/assets/www/index.html");
     }
 
     private void emit(String event, String key, String value) {
