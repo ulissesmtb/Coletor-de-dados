@@ -22,7 +22,10 @@ public final class ZebraReaderController implements RfidEventsListener {
         this.tag = tag;
     }
 
-    private void submit(Runnable action) {
+    @FunctionalInterface
+    private interface ZebraAction { void run() throws Exception; }
+
+    private void submit(ZebraAction action) {
         io.execute(() -> {
             try { action.run(); }
             catch (Exception ex) { status.accept("Erro Zebra: " + ex.getMessage()); }
