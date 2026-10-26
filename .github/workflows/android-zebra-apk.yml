@@ -1,0 +1,97 @@
+name: Gerar APK Zebra RFD8500
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/zebra-rfd8500
+    paths:
+      - 'src/**'
+      - 'android/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'vite.config.js'
+      - '.github/workflows/android-zebra-apk.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Baixar codigo
+        uses: actions/checkout@v4
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Instalar dependencias web
+        run: pnpm install --frozen-lockfile
+
+      - name: Testar formato RFID
+        run: node --test tests/zebraRecord.test.js
+
+      - name: Compilar interface React
+        run: pnpm build
+
+      - name: Copiar interface para Android
+        run: |
+          mkdir -p android/app/src/main/assets/www
+          cp -a dist/. android/app/src/main/assets/www/
+
+      - name: Obter SDK Zebra de origem privada (opcional)
+        env:
+          ZEBRA_SDK_URL: ${{ secrets.ZEBRA_SDK_URL || 'https://entregadekit.corridaeaventura.com/SDK/Zebra_RFIDAPI3_SDK_2.0.5.297.zip' }}
+        run: |
+          mkdir -p android/app/libs
+          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
+            --output /tmp/zebra-sdk.zip "$ZEBRA_SDK_URL"
+          echo "d3e2f386047aa57a7ce0eaa0cbf9d071fc1c52a54e6ac7bdaa61e8a89ac01d3e  /tmp/zebra-sdk.zip" | sha256sum -c -
+          python3 - <<'PY'
+          import zipfile, pathlib, sys
+          archive = '/tmp/zebra-sdk.zip'
+          target = pathlib.Path('android/app/libs')
+          expected = 'rfidapi3lib-2.0.5.297.aar'
+          with zipfile.ZipFile(archive) as z:
+              candidates = [x for x in z.infolist() if pathlib.PurePosixPath(x.filename).name == expected and not x.is_dir()]
+              if not candidates:
+                  sys.exit('SDK Zebra 2.0.5.297 nao encontrado no arquivo')
+              target.joinpath(expected).write_bytes(z.read(candidates[0]))
+              print('Biblioteca RFID Zebra extraída para o build, sem publicar no repositório.')
+          PY
+          rm -f /tmp/zebra-sdk.zip
+
+      - name: Conferir biblioteca oficial Zebra
+        run: |
+          if ! find android/app/libs -maxdepth 1 -type f \( -iname '*.aar' -o -iname '*.jar' \) 2>/dev/null | grep -q .; then
+            echo "::error::SDK Zebra ausente. Adicione os arquivos oficiais AAR/JAR e dependencias em android/app/libs/ antes de compilar."
+            exit 1
+          fi
+
+      - name: Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Compilar APK de teste
+        working-directory: android
+        run: gradle --no-daemon assembleDebug
+
+      - name: Disponibilizar APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Coletor-Zebra-RFD8500-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14

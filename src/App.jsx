@@ -8,12 +8,47 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Download, Send, Settings, Play, Pause, MessageCircle, Mail, X } from 'lucide-react'
 import logo from './assets/logo.jpg'
 import './App.css'
+import { buildZebraRecord } from './lib/zebraRecord.js'
+
+const RECORD_STORAGE_KEY = 'ca-coletor-logs-v2'
+const ZEBRA_COOLDOWN_MS = 5000
+const readSavedLogs = () => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(RECORD_STORAGE_KEY) || '[]')
+    return Array.isArray(saved) ? saved.filter(x => typeof x === 'string') : []
+  } catch { return [] }
+}
+
 
 function App() {
   const [sessionId, setSessionId] = useState('')
+  const [collectionMode, setCollectionMode] = useState('manual')
+  const [zebraStatus, setZebraStatus] = useState('Aguardando integração Android')
   const [isSessionActive, setIsSessionActive] = useState(false)
   const [userInput, setUserInput] = useState('')
-  const [logs, setLogs] = useState([])
+  const [logs, setLogs] = useState(readSavedLogs)
+  const lastTagTimes = useRef(new Map())
+  const feedbackEnabled = useRef(true)
+  const [saveStatus, setSaveStatus] = useState('Salvo localmente')
+
+  const storeLogs = (records) => {
+    try {
+      localStorage.setItem(RECORD_STORAGE_KEY, JSON.stringify(records))
+      setSaveStatus('Salvo localmente')
+      return true
+    } catch {
+      setSaveStatus('ERRO: armazenamento cheio/indisponível; exporte os dados')
+      return false
+    }
+  }
+  const appendRecord = (record) => {
+    setLogs(previous => {
+      const next = [...previous, record]
+      storeLogs(next)
+      return next
+    })
+  }
+
   const [ftpStatus, setFtpStatus] = useState('Desconectado')
   const [showSendModal, setShowSendModal] = useState(false)
   const [showFtpModal, setShowFtpModal] = useState(false)
@@ -25,6 +60,49 @@ function App() {
     enabled: false
   })
   const inputRef = useRef(null)
+
+  // Eventos enviados pela camada nativa Android (SDK Zebra).
+  // Nenhuma conexão é simulada na versão web.
+  useEffect(() => {
+    const onTag = (event) => {
+      if (collectionMode !== 'zebra' || !isSessionActive) return
+      try {
+        const chip = String(event.detail?.chip || '')
+        const now = Date.now()
+        if (now - (lastTagTimes.current.get(chip) ?? -Infinity) < ZEBRA_COOLDOWN_MS) return
+        const record = buildZebraRecord(chip, new Date(now))
+        lastTagTimes.current.set(chip, now)
+        appendRecord(record)
+        try { window.ZebraNative?.feedback?.() } catch { /* feedback opcional */ }
+      } catch (error) {
+        setZebraStatus(`Leitura rejeitada: ${error.message}`)
+      }
+    }
+    const onStatus = (event) => {
+      setZebraStatus(String(event.detail?.status || 'Status indisponível'))
+    }
+    window.addEventListener('zebra-rfid-tag', onTag)
+    window.addEventListener('zebra-rfid-status', onStatus)
+    return () => {
+      window.removeEventListener('zebra-rfid-tag', onTag)
+      window.removeEventListener('zebra-rfid-status', onStatus)
+    }
+  }, [collectionMode, isSessionActive])
+
+  const beginZebraSession = () => {
+    setCollectionMode('zebra')
+    setIsSessionActive(true)
+    // Histórico preservado entre sessões e reinicializações.
+  }
+
+  const zebraCommand = (command) => {
+    const api = window.ZebraNative
+    if (!api || typeof api[command] !== 'function') {
+      setZebraStatus('Conexão indisponível: abra o APK Android com SDK Zebra')
+      return
+    }
+    api[command]()
+  }
 
   // Função para formatar número com zeros à esquerda
   const formatNumber = (num, length) => {
@@ -44,8 +122,9 @@ function App() {
   // Função para iniciar sessão
   const startSession = () => {
     if (sessionId.length === 5) {
+      setCollectionMode('manual')
       setIsSessionActive(true)
-      setLogs([])
+      // Preservar os registros anteriores ao iniciar outra sessão.
       // Focar no input de entrada de dados
       setTimeout(() => {
         if (inputRef.current) {
@@ -91,7 +170,7 @@ function App() {
       const timestamp = getCurrentTimestamp()
       const logEntry = `${formattedId}${formattedNumber}${timestamp}`
       
-      setLogs(prev => [...prev, logEntry])
+      appendRecord(logEntry)
       setUserInput('')
       
       // Focar novamente no input
@@ -115,7 +194,7 @@ function App() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `log_${sessionId}_${new Date().toISOString().split('T')[0]}.txt`
+    a.download = `log_${collectionMode === 'zebra' ? '850' : sessionId}_${new Date().toISOString().split('T')[0]}.txt`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -125,7 +204,12 @@ function App() {
   // Função para enviar via WhatsApp
   const sendViaWhatsApp = () => {
     const logContent = logs.join('\n')
-    const message = `*Coletor Ponto de Controle - Corrida e Aventura*\n\nSessão: ${sessionId}\nData: ${new Date().toLocaleDateString()}\nTotal de entradas: ${logs.length}\n\n*Log de Entradas:*\n${logContent}`
+    const message = `*Coletor Ponto de Controle - Corrida e Aventura*\n\nSessão: ${collectionMode === 'zebra' ? 'Gravada nos chips' : sessionId}\nData: ${new Date().toLocaleDateString()}\nTotal de entradas: ${logs.length}\n\n*Log de Entradas:*\n${logContent}`
+    if (window.ZebraNative?.share) {
+      window.ZebraNative.share(message)
+      setShowSendModal(false)
+      return
+    }
     const encodedMessage = encodeURIComponent(message)
     const whatsappUrl = `https://wa.me/?text=${encodedMessage}`
     window.open(whatsappUrl, '_blank')
@@ -192,17 +276,27 @@ function App() {
           </CardHeader>
         </Card>
 
+        {/* Seleção de coletor: mantém a entrada manual independente do Zebra */}
+        {!isSessionActive && (
+          <Card className="bg-white/80 backdrop-blur-sm shadow-lg">
+            <CardContent className="pt-6 flex flex-wrap gap-2">
+              <Button type="button" variant={collectionMode === 'manual' ? 'default' : 'outline'} onClick={() => setCollectionMode('manual')}>Manual</Button>
+              <Button type="button" variant={collectionMode === 'zebra' ? 'default' : 'outline'} onClick={() => setCollectionMode('zebra')}>Zebra RFD8500</Button>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Configuração de Sessão */}
         {!isSessionActive ? (
           <Card className="bg-white/80 backdrop-blur-sm shadow-lg">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Settings className="h-5 w-5" />
-                Configurar Sessão
+                {collectionMode === 'manual' ? 'Configurar Sessão' : 'Leitor Zebra RFD8500'}
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div>
+              {collectionMode === 'manual' ? <div>
                 <label className="block text-sm font-medium mb-2">
                   ID da Sessão (5 dígitos)
                 </label>
@@ -214,10 +308,10 @@ function App() {
                   placeholder="Ex: 01234"
                   className="text-center text-lg font-mono"
                 />
-              </div>
-              <Button 
-                onClick={startSession}
-                disabled={sessionId.length !== 5}
+              </div> : <p className="text-sm text-gray-600">Os 16 dígitos da sessão e do atleta já estão gravados no chip. Não é necessário informar a sessão. A conexão física depende do módulo Android Zebra.</p>}
+              <Button
+                onClick={collectionMode === 'manual' ? startSession : beginZebraSession}
+                disabled={collectionMode === 'manual' && sessionId.length !== 5}
                 className="w-full"
                 size="lg"
               >
@@ -234,7 +328,7 @@ function App() {
                 <div className="flex justify-between items-center">
                   <CardTitle className="flex items-center gap-2">
                     <Badge variant="secondary" className="bg-green-100 text-green-800">
-                      Sessão Ativa: {sessionId}
+                      {collectionMode === 'manual' ? `Sessão Ativa: ${sessionId}` : 'Coleta Zebra RFD8500'}
                     </Badge>
                   </CardTitle>
                   <Button onClick={stopSession} variant="outline" size="sm">
@@ -244,13 +338,27 @@ function App() {
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
+                {collectionMode === 'zebra' ? (
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">Comunicação Zebra: <span className={/^(Conectado|Lendo etiquetas)/.test(zebraStatus) ? "text-green-700" : /Erro|perdida|Desconectado/i.test(zebraStatus) ? "text-red-700" : "text-amber-700"}>{zebraStatus}</span></p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button type="button" onClick={() => zebraCommand('connect')}>Conectar</Button>
+                      <Button type="button" variant="outline" onClick={() => zebraCommand('start')}>Iniciar leitura</Button>
+                      <Button type="button" variant="outline" onClick={() => zebraCommand('stop')}>Parar leitura</Button>
+                      <Button type="button" variant="outline" onClick={() => zebraCommand('disconnect')}>Desconectar</Button>
+                    </div>
+                    <p className="text-sm text-gray-600">Registro: 850 + 16 dígitos do chip + HH:MM:SS.mmm. Leituras só entram quando recebidas do módulo nativo Zebra.</p>
+                  </div>
+                ) : <>
                 <div>
                   <label className="block text-sm font-medium mb-2">
                     Número do Participante
                   </label>
                   <Input
                     ref={inputRef}
-                    type="text"
+                    type="tel"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     value={userInput}
                     onChange={(e) => setUserInput(e.target.value.replace(/\D/g, ''))}
                     onKeyPress={handleKeyPress}
@@ -265,6 +373,7 @@ function App() {
                     Registrar Entrada
                   </Button>
                 </div>
+                </>}
               </CardContent>
             </Card>
 
@@ -340,13 +449,15 @@ function App() {
                 </div>
               </CardHeader>
               <CardContent>
+                <p className="text-xs text-gray-600 mb-2">Últimas leituras primeiro · RFID: 5 segundos entre leituras do mesmo chip</p>
+                <p className={`text-xs mb-2 ${saveStatus.startsWith("ERRO") ? "text-red-600" : "text-green-700"}`}>{saveStatus}</p>
                 <div className="max-h-64 overflow-y-auto space-y-1">
                   {logs.length === 0 ? (
                     <p className="text-gray-500 text-center py-4">
                       Nenhuma entrada registrada ainda
                     </p>
                   ) : (
-                    logs.map((log, index) => (
+                    [...logs].reverse().map((log, index) => (
                       <div key={index} className="font-mono text-sm bg-gray-50 p-2 rounded border">
                         {log}
                       </div>
