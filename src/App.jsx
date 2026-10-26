@@ -10,13 +10,45 @@ import logo from './assets/logo.jpg'
 import './App.css'
 import { buildZebraRecord } from './lib/zebraRecord.js'
 
+const RECORD_STORAGE_KEY = 'ca-coletor-logs-v2'
+const ZEBRA_COOLDOWN_MS = 5000
+const readSavedLogs = () => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(RECORD_STORAGE_KEY) || '[]')
+    return Array.isArray(saved) ? saved.filter(x => typeof x === 'string') : []
+  } catch { return [] }
+}
+
+
 function App() {
   const [sessionId, setSessionId] = useState('')
   const [collectionMode, setCollectionMode] = useState('manual')
   const [zebraStatus, setZebraStatus] = useState('Aguardando integração Android')
   const [isSessionActive, setIsSessionActive] = useState(false)
   const [userInput, setUserInput] = useState('')
-  const [logs, setLogs] = useState([])
+  const [logs, setLogs] = useState(readSavedLogs)
+  const lastTagTimes = useRef(new Map())
+  const feedbackEnabled = useRef(true)
+  const [saveStatus, setSaveStatus] = useState('Salvo localmente')
+
+  const storeLogs = (records) => {
+    try {
+      localStorage.setItem(RECORD_STORAGE_KEY, JSON.stringify(records))
+      setSaveStatus('Salvo localmente')
+      return true
+    } catch {
+      setSaveStatus('ERRO: armazenamento cheio/indisponível; exporte os dados')
+      return false
+    }
+  }
+  const appendRecord = (record) => {
+    setLogs(previous => {
+      const next = [...previous, record]
+      storeLogs(next)
+      return next
+    })
+  }
+
   const [ftpStatus, setFtpStatus] = useState('Desconectado')
   const [showSendModal, setShowSendModal] = useState(false)
   const [showFtpModal, setShowFtpModal] = useState(false)
@@ -35,8 +67,13 @@ function App() {
     const onTag = (event) => {
       if (collectionMode !== 'zebra' || !isSessionActive) return
       try {
-        const record = buildZebraRecord(event.detail?.chip, new Date())
-        setLogs(previous => [...previous, record])
+        const chip = String(event.detail?.chip || '')
+        const now = Date.now()
+        if (now - (lastTagTimes.current.get(chip) ?? -Infinity) < ZEBRA_COOLDOWN_MS) return
+        const record = buildZebraRecord(chip, new Date(now))
+        lastTagTimes.current.set(chip, now)
+        appendRecord(record)
+        try { window.ZebraNative?.feedback?.() } catch { /* feedback opcional */ }
       } catch (error) {
         setZebraStatus(`Leitura rejeitada: ${error.message}`)
       }
@@ -55,7 +92,7 @@ function App() {
   const beginZebraSession = () => {
     setCollectionMode('zebra')
     setIsSessionActive(true)
-    setLogs([])
+    // Histórico preservado entre sessões e reinicializações.
   }
 
   const zebraCommand = (command) => {
@@ -87,7 +124,7 @@ function App() {
     if (sessionId.length === 5) {
       setCollectionMode('manual')
       setIsSessionActive(true)
-      setLogs([])
+      // Preservar os registros anteriores ao iniciar outra sessão.
       // Focar no input de entrada de dados
       setTimeout(() => {
         if (inputRef.current) {
@@ -133,7 +170,7 @@ function App() {
       const timestamp = getCurrentTimestamp()
       const logEntry = `${formattedId}${formattedNumber}${timestamp}`
       
-      setLogs(prev => [...prev, logEntry])
+      appendRecord(logEntry)
       setUserInput('')
       
       // Focar novamente no input
@@ -167,7 +204,7 @@ function App() {
   // Função para enviar via WhatsApp
   const sendViaWhatsApp = () => {
     const logContent = logs.join('\n')
-    const message = `*Coletor Ponto de Controle - Corrida e Aventura*\n\nSessão: ${sessionId}\nData: ${new Date().toLocaleDateString()}\nTotal de entradas: ${logs.length}\n\n*Log de Entradas:*\n${logContent}`
+    const message = `*Coletor Ponto de Controle - Corrida e Aventura*\n\nSessão: ${collectionMode === 'zebra' ? 'Gravada nos chips' : sessionId}\nData: ${new Date().toLocaleDateString()}\nTotal de entradas: ${logs.length}\n\n*Log de Entradas:*\n${logContent}`
     const encodedMessage = encodeURIComponent(message)
     const whatsappUrl = `https://wa.me/?text=${encodedMessage}`
     window.open(whatsappUrl, '_blank')
@@ -314,7 +351,9 @@ function App() {
                   </label>
                   <Input
                     ref={inputRef}
-                    type="text"
+                    type="tel"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     value={userInput}
                     onChange={(e) => setUserInput(e.target.value.replace(/\D/g, ''))}
                     onKeyPress={handleKeyPress}
@@ -405,13 +444,15 @@ function App() {
                 </div>
               </CardHeader>
               <CardContent>
+                <p className="text-xs text-gray-600 mb-2">Últimas leituras primeiro · RFID: 5 segundos entre leituras do mesmo chip</p>
+                <p className={`text-xs mb-2 ${saveStatus.startsWith("ERRO") ? "text-red-600" : "text-green-700"}`}>{saveStatus}</p>
                 <div className="max-h-64 overflow-y-auto space-y-1">
                   {logs.length === 0 ? (
                     <p className="text-gray-500 text-center py-4">
                       Nenhuma entrada registrada ainda
                     </p>
                   ) : (
-                    logs.map((log, index) => (
+                    [...logs].reverse().map((log, index) => (
                       <div key={index} className="font-mono text-sm bg-gray-50 p-2 rounded border">
                         {log}
                       </div>
