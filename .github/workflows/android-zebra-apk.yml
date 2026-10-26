@@ -29,8 +29,6 @@ jobs:
 
       - name: pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: '10.4.1'
 
       - name: Instalar dependencias web
         run: pnpm install --frozen-lockfile
