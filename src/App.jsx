@@ -205,6 +205,11 @@ function App() {
   const sendViaWhatsApp = () => {
     const logContent = logs.join('\n')
     const message = `*Coletor Ponto de Controle - Corrida e Aventura*\n\nSessão: ${collectionMode === 'zebra' ? 'Gravada nos chips' : sessionId}\nData: ${new Date().toLocaleDateString()}\nTotal de entradas: ${logs.length}\n\n*Log de Entradas:*\n${logContent}`
+    if (window.ZebraNative?.share) {
+      window.ZebraNative.share(message)
+      setShowSendModal(false)
+      return
+    }
     const encodedMessage = encodeURIComponent(message)
     const whatsappUrl = `https://wa.me/?text=${encodedMessage}`
     window.open(whatsappUrl, '_blank')
@@ -335,7 +340,7 @@ function App() {
               <CardContent className="space-y-4">
                 {collectionMode === 'zebra' ? (
                   <div className="space-y-2">
-                    <p className="text-sm font-medium">Leitor: {zebraStatus}</p>
+                    <p className="text-sm font-medium">Comunicação Zebra: <span className={/^(Conectado|Lendo etiquetas)/.test(zebraStatus) ? "text-green-700" : /Erro|perdida|Desconectado/i.test(zebraStatus) ? "text-red-700" : "text-amber-700"}>{zebraStatus}</span></p>
                     <div className="flex flex-wrap gap-2">
                       <Button type="button" onClick={() => zebraCommand('connect')}>Conectar</Button>
                       <Button type="button" variant="outline" onClick={() => zebraCommand('start')}>Iniciar leitura</Button>
