@@ -4,6 +4,11 @@ import android.Manifest;
 import android.app.Activity;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Vibrator;
+import android.os.VibrationEffect;
+import android.content.Context;
+import android.media.ToneGenerator;
+import android.media.AudioManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -38,6 +43,7 @@ public class MainActivity extends Activity {
             @JavascriptInterface public void disconnect() { runOnUiThread(() -> reader.disconnect()); }
             @JavascriptInterface public void start() { runOnUiThread(() -> reader.start()); }
             @JavascriptInterface public void stop() { runOnUiThread(() -> reader.stop()); }
+            @JavascriptInterface public void feedback() { runOnUiThread(() -> playFeedback()); }
         }, "ZebraNative");
         if (Build.VERSION.SDK_INT >= 31 &&
             (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED ||
@@ -46,6 +52,21 @@ public class MainActivity extends Activity {
         }
         // The Vite build must be copied to app/src/main/assets/www/ before assembling.
         web.loadUrl("https://appassets.androidplatform.net/assets/www/index.html");
+    }
+
+    private void playFeedback() {
+        try {
+            ToneGenerator tone = new ToneGenerator(AudioManager.STREAM_NOTIFICATION, 75);
+            tone.startTone(ToneGenerator.TONE_PROP_BEEP, 90);
+            web.postDelayed(tone::release, 160);
+        } catch (Exception ignored) {}
+        try {
+            Vibrator vibration = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+            if (vibration != null && vibration.hasVibrator()) {
+                if (Build.VERSION.SDK_INT >= 26) vibration.vibrate(VibrationEffect.createOneShot(80, VibrationEffect.DEFAULT_AMPLITUDE));
+                else vibration.vibrate(80);
+            }
+        } catch (Exception ignored) {}
     }
 
     private void emit(String event, String key, String value) {
