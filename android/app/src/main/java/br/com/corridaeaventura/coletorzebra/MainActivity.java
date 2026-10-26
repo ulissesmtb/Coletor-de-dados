@@ -7,6 +7,7 @@ import android.os.Bundle;
 import android.os.Vibrator;
 import android.os.VibrationEffect;
 import android.content.Context;
+import android.content.Intent;
 import android.media.ToneGenerator;
 import android.media.AudioManager;
 import android.webkit.JavascriptInterface;
@@ -44,6 +45,7 @@ public class MainActivity extends Activity {
             @JavascriptInterface public void start() { runOnUiThread(() -> reader.start()); }
             @JavascriptInterface public void stop() { runOnUiThread(() -> reader.stop()); }
             @JavascriptInterface public void feedback() { runOnUiThread(() -> playFeedback()); }
+            @JavascriptInterface public void share(String data) { runOnUiThread(() -> shareText(data)); }
         }, "ZebraNative");
         if (Build.VERSION.SDK_INT >= 31 &&
             (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED ||
@@ -52,6 +54,15 @@ public class MainActivity extends Activity {
         }
         // The Vite build must be copied to app/src/main/assets/www/ before assembling.
         web.loadUrl("https://appassets.androidplatform.net/assets/www/index.html");
+    }
+
+    private void shareText(String data) {
+        try {
+            Intent send = new Intent(Intent.ACTION_SEND);
+            send.setType("text/plain");
+            send.putExtra(Intent.EXTRA_TEXT, data);
+            startActivity(Intent.createChooser(send, "Compartilhar leituras"));
+        } catch (Exception ignored) {}
     }
 
     private void playFeedback() {
